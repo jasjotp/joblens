@@ -18,6 +18,7 @@ import logging
 import os
 import re 
 import psycopg
+from psycopg.types.json import Json
 from dataclasses import dataclass 
 from datetime import datetime, timezone
 from pathlib import Path 
@@ -214,6 +215,14 @@ def validate_minimum(record: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         return False, "Missing job_posting_id"
     return True, None
 
+def jsonb_or_none(value):
+    '''
+    Converts a value to JSONB format.
+    '''
+    if value is None:
+        return None 
+    return Json(value)
+
 def normalize_record(record: Dict[str, Any], *, source: str) -> Dict[str, Any]:
     """
     Create a clean, typed row dictionary that matches the DB columns for normalization
@@ -254,13 +263,13 @@ def normalize_record(record: Dict[str, Any], *, source: str) -> Dict[str, Any]:
         "is_easy_apply": to_bool(record.get("is_easy_apply")),
         "application_availability": to_bool(record.get("application_availability")),
 
-        "discovery_input": discovery_input,
-        "input_payload": input_payload,
+        "discovery_input": jsonb_or_none(discovery_input),
+        "input_payload": jsonb_or_none(input_payload),
 
         "scraped_at": to_timestamptz(record.get("timestamp")),
 
         # always store the full payload/record for audit/debug purposes and future schema evolution as a source of truth
-        "raw_payload": record,
+        "raw_payload": Json(record),
     }
     return row
 
@@ -307,9 +316,9 @@ VALUES (
   %(job_seniority_level)s, %(job_function)s, %(job_employment_type)s, %(job_industries)s,
   %(job_posted_time)s, %(job_posted_date)s, %(job_num_applicants)s,
   %(apply_link)s, %(is_easy_apply)s, %(application_availability)s,
-  %(discovery_input)s::jsonb, %(input_payload)s::jsonb,
+  %(discovery_input)s, %(input_payload)s,
   %(scraped_at)s,
-  %(raw_payload)s::jsonb,
+  %(raw_payload)s,
   NOW(),
   NOW()
 )
