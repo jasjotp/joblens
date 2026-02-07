@@ -50,6 +50,7 @@ x-airflow-common:
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
   build: .
+  image: joblens-airflow:3.1.7
   # build: .
   env_file:
     - ${ENV_FILE_PATH:-.env}
@@ -119,7 +120,16 @@ services:
       retries: 50
       start_period: 30s
     restart: always
-
+  api:
+    build:
+      context: ./api
+    environment:
+      PG_DSN: ${PG_DSN}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
   airflow-apiserver:
     <<: *airflow-common
     command: api-server
