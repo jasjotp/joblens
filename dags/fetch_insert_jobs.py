@@ -2,13 +2,14 @@ from datetime import datetime
 from pathlib import Path
 
 from airflow import DAG 
-from airflow.operators.python import PythonOperator 
+from airflow.providers.standard.operators.python import PythonOperator 
 from airflow.models import Variable 
-from airflow.operators.email import EmailOperator 
-from airflow.utils.trigger_rule import TriggerRule
+from airflow.providers.smtp.operators.smtp import EmailOperator
+from airflow.task.trigger_rule import TriggerRule
 
 from src.ingest_data_01 import fetch_linkedin_jobs
 import pendulum
+import os
 
 def run_fetch_jobs(**context):
     '''
@@ -17,9 +18,17 @@ def run_fetch_jobs(**context):
     # store the secret in an Airflow Variables/Connections
     api_key = Variable.get("BRIGHTDATA_API_KEY")
 
-    cities = ["Vancouver", "Toronto"]
-    roles = ["Machine Learning Engineer", "AI Engineer", "Data Scientist"]
+    dag_run = context.get("dag_run")
+    config = (dag_run.config or {}) if dag_run else {} 
 
+    # default to cities Vancouver, Toronto and Montreal so it works even without a UI configuration being sent 
+    default_cities = Variable.get("JOB_CITIES", default_var = '["Vancouver","Toronto" "Montreal"]', deserialize_json = True)
+    default_roles  = Variable.get("JOB_ROLES",  default_var = '["Machine Learning Engineer","AI Engineer","Data Scientist"]', deserialize_json = True)
+
+    # cities amd roles from the UI or a manual trigger that override the default cities 
+    cities = config.get("cities", default_cities)
+    roles = config.get("roles", default_roles)
+    
     out_dir = Path("/opt/airflow/data/raw")
 
     outfile, job_count = fetch_linkedin_jobs(
@@ -27,14 +36,16 @@ def run_fetch_jobs(**context):
         cities = cities,
         roles = roles,
         out_dir = out_dir,
-        time_range = "Past 24 hours",
-        job_type = "Full-time",
-        experience_level = "Entry level"
+        time_range = config.get("time_range", "Past 24 hours"),
+        job_type = config.get("job_type", "Full-time"),
+        experience_level = config.get("experience_level", "Entry level")
     )
 
     return {
         "outfile": str(outfile),
-        "job_count": job_count
+        "job_count": job_count,
+        "cities": cities,
+        "roles": roles
     }
 
 def run_ingest_postgres(**context):
@@ -90,7 +101,7 @@ with DAG(
     # Email if task was successful or unsuccessful
     email_success = EmailOperator(
         task_id = "email_success",
-        to = [Variable.get("ALERT_EMAIL_TO")],
+        to = [os.getenv("EMAIL_TO_SEND_ALERT_TO")],
         subject = "[OK] LinkedIn Jobs Fetch SUCCESS — {{ ds }}",
         html_content="""
         <h3>LinkedIn Jobs Fetch: SUCCESS</h3>
@@ -98,8 +109,8 @@ with DAG(
         <p><b>DAG:</b> {{ dag.dag_id }}</p>
         <p><b>Run:</b> {{ ds }} ({{ ts }})</p>
 
-        <p><b>Job count:</b> {{ ti.xcom_pull(task_ids='fetch_jobs')['job_count'] }}</p>
-        <p><b>Saved file:</b> {{ ti.xcom_pull(task_ids='fetch_jobs')['outfile'] }}</p>
+        <p><b>Job count:</b> {{ (ti.xcom_pull(task_ids='fetch_jobs') or {}).get('job_count', 'N/A') }}</p>
+        <p><b>Saved file:</b> {{ (ti.xcom_pull(task_ids='fetch_jobs') or {}).get('outfile', 'N/A') }}</p>
 
         <hr>
 
@@ -110,12 +121,13 @@ with DAG(
         </a>
         </p>
         """,
-        trigger_rule = TriggerRule.ALL_SUCCESS,  # only if upstream succeeded
+        conn_id = "smtp_default",
+        trigger_rule = TriggerRule.ALL_SUCCESS  # only if upstream succeeded
     )
 
     email_failure = EmailOperator(
         task_id = "email_failure",
-        to = [Variable.get("ALERT_EMAIL_TO")],
+        to = [os.getenv("EMAIL_TO_SEND_ALERT_TO")],
         subject="[FAILED] LinkedIn Jobs Fetch FAILED — {{ ds }}",
         html_content="""
         <h3>LinkedIn Jobs Fetch: FAILED</h3>
@@ -130,7 +142,12 @@ with DAG(
 
         <p><b>Task Logs:</b> <a href="{{ ti.log_url }}" target="_blank">View logs in Airflow</a></p>
         """,
+        conn_id = "smtp_default",
         trigger_rule = TriggerRule.ONE_FAILED,  # runs if any upstream task fails
     )
 
-    fetch_task >> ingest_task >> [email_success, email_failure]
+    # if fetch fails or if ingest fails, email_failure runs, and if both fetch and ingest suceed; then the email is successful
+    fetch_task >> ingest_task
+
+    [fetch_task, ingest_task] >> email_success
+    [fetch_task, ingest_task] >> email_failure

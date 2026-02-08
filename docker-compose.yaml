@@ -44,14 +44,11 @@
 #
 # Feel free to modify this file to suit your needs.
 ---
-x-airflow-common:
-  &airflow-common
+x-airflow-common: &airflow-common
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  build: .
   image: joblens-airflow:3.1.7
-  # build: .
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment:
@@ -65,6 +62,14 @@ x-airflow-common:
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__SMTP__SMTP_HOST: ${AIRFLOW__SMTP__SMTP_HOST}
+    AIRFLOW__SMTP__SMTP_PORT: ${AIRFLOW__SMTP__SMTP_PORT}
+    AIRFLOW__SMTP__SMTP_USER: ${EMAIL_TO_SEND_ALERT_TO}
+    AIRFLOW__SMTP__SMTP_PASSWORD: ${EMAIL_TO_SEND_ALERT_TO_PW}
+    AIRFLOW__SMTP__SMTP_MAIL_FROM: ${EMAIL_ALERT_FROM}
+    AIRFLOW__SMTP__SMTP_STARTTLS: "true"
+    AIRFLOW__SMTP__SMTP_SSL: "false"
+    AIRFLOW__SMTP__SMTP_CONN_ID: smtp_default
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -132,6 +137,7 @@ services:
         condition: service_healthy
   airflow-apiserver:
     <<: *airflow-common
+    build: .
     command: api-server
     ports:
       - "8080:8080"
